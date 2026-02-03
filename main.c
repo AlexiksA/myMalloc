@@ -42,7 +42,7 @@ struct mem_page *request_page() {
 
 struct heap_header *searchFreeHeap(size_t size, struct mem_page *page) {
 	struct heap_header *i;
-	for(i = page->start; i->block_size < size; i = i->next);
+	for(i = page->start; i->block_size < size && i->is_free; i = i->next);
 	return i;
 }
 
@@ -88,6 +88,7 @@ void *my_malloc(size_t size) {
 
 		new_heap->next = frag_heap;
 		new_heap->block_size = size;
+		new_heap->is_free = 0;
 
 	} else {
 		new_heap->next = NULL;
@@ -96,10 +97,29 @@ void *my_malloc(size_t size) {
 	return new_heap + 1;
 }
 
-//TODO: functie care concateneaza toate block-urile libere
+void scratchList(struct heap_header *a, struct heap_header *b) {
+	// a - first b - second
+	a->block_size += b->block_size + sizeof(struct heap_header);
+	a->next = b->next;
+	a->next->prev = a;
+}
 
+void sanitizePage(struct mem_page *page) {
+	struct heap_header *i = page->start;
+	while(i->next) {
+		if(i->is_free && i->next->is_free) {
+			scratchList(i, i->next);
+			continue;
+		}
+		i = i->next;
+	}
+}
+
+
+//TODO: functie care concateneaza toate block-urile libere
+//TODO; free :)
 int main(void) {
-	int *v = (int *) my_malloc(sizeof(int) * 500);
+	int *v = (int *) my_malloc(sizeof(int) * 1100);
 	if(!v) {
 		fprintf(stdout, "Not enough mem\n");
 		return -1;
