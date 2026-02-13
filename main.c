@@ -7,8 +7,6 @@
 struct __attribute__((packed)) heap_header{
 	size_t block_size;
 	unsigned char is_free;
-	struct mem_page *papa;
-	// ^^^ inefficient but I want to workaround some bs when freeing memory
 	struct heap_header *next;
 	struct heap_header *prev;
 };
@@ -26,7 +24,10 @@ struct mem_page *request_page() {
 									 PROT_READ | PROT_WRITE, // r+w
 									 MAP_PRIVATE | MAP_ANONYMOUS, // private to me and not a file (plus 0x0-ed)
 									 -1, 0);
-	new_page->avail = 4096 - (sizeof(size_t) 
+	if(new_page == MAP_FAILED) {
+		return NULL;
+	}
+	new_page->avail = PAGE_SIZE - (sizeof(size_t) 
 							  + 2 * sizeof(struct mem_page *)
 							  + sizeof(struct heap_header));
 	new_page->next = NULL;
@@ -34,7 +35,6 @@ struct mem_page *request_page() {
 	new_page->start = (struct heap_header *) (new_page + 1);
 	new_page->start->block_size = new_page->avail;
 	new_page->start->is_free = 1;
-	new_page->start->papa = new_page;
 	new_page->start->next = NULL;
 	new_page->start->prev = NULL;
 	return new_page;
@@ -42,7 +42,11 @@ struct mem_page *request_page() {
 
 struct heap_header *searchFreeHeap(size_t size, struct mem_page *page) {
 	struct heap_header *i;
-	for(i = page->start; i->block_size < size && i->is_free; i = i->next);
+	for(i = page->start; i->block_size < size || !i->is_free; i = i->next) {
+		if(!i->next) {
+			return NULL;
+		}
+	}
 	return i;
 }
 
@@ -69,6 +73,9 @@ void *my_malloc(size_t size) {
 	static struct mem_page *start_page = NULL;
 	if(!start_page) {
 		start_page = request_page();
+		if(!start_page) {
+			fprintf(stderr, "Mmap failed\n");
+		}
 	}
 	size_t howMuchNeed = size + sizeof(struct heap_header);
 
@@ -85,41 +92,61 @@ void *my_malloc(size_t size) {
 		frag_heap->next = new_heap->next;
 		if(frag_heap->next) frag_heap->next->prev = frag_heap;
 		frag_heap->prev = new_heap;
+		frag_heap->is_free = 1;
 
 		new_heap->next = frag_heap;
 		new_heap->block_size = size;
 		new_heap->is_free = 0;
 
 	} else {
-		new_heap->next = NULL;
+		new_heap->is_free = 0;
 	}
 	page->avail -= howMuchNeed;
 	return new_heap + 1;
 }
 
-void scratchList(struct heap_header *a, struct heap_header *b) {
+void heapConcat(struct heap_header *a, struct heap_header *b) {
 	// a - first b - second
 	a->block_size += b->block_size + sizeof(struct heap_header);
 	a->next = b->next;
-	a->next->prev = a;
-}
-
-void sanitizePage(struct mem_page *page) {
-	struct heap_header *i = page->start;
-	while(i->next) {
-		if(i->is_free && i->next->is_free) {
-			scratchList(i, i->next);
-			continue;
-		}
-		i = i->next;
+	if(a->next) {
+		a->next->prev = a;
 	}
 }
 
+void sanitizePage(struct heap_header *iterrator) {
+	while(iterrator->next) {
+		if(iterrator->is_free && iterrator->next->is_free) {
+			heapConcat(iterrator, iterrator->next);
+			continue;
+		}
+		iterrator = iterrator->next;
+	}
+}
 
+void goToStart(struct heap_header **ptr) {
+	while ((*ptr)->prev) (*ptr) = (*ptr)->prev;
+}
+
+void free(void *ptr) {
+	struct heap_header *toFree = (struct heap_header *)ptr - 1;
+
+	toFree->is_free = 1;
+	size_t freeBlockSz = toFree->block_size;
+
+	goToStart(&toFree);
+
+	struct mem_page *page = (struct mem_page *)toFree - 1;
+	page->avail += freeBlockSz;
+
+	sanitizePage(toFree);
+}
+
+void cleanup();
 //TODO: functie care concateneaza toate block-urile libere
 //TODO; free :)
 int main(void) {
-	int *v = (int *) my_malloc(sizeof(int) * 1100);
+	int *v = (int *) my_malloc(sizeof(int) * 500);
 	if(!v) {
 		fprintf(stdout, "Not enough mem\n");
 		return -1;
