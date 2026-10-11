@@ -1,13 +1,13 @@
 CC = gcc
 CFLAGS := -Wall -Wextra -std=c11
 
-.PHONY: clean
-
-myMal.o: myMal.c
-	$(CC) $(CFLAGS) -c $^ -o myMal.o
+.PHONY: all clean
 
 all: main.c myMal.o
-	gcc $(CFLAGS) $^ -o malloc
+	$(CC) $(CFLAGS) $^ -o malloc
+
+myMal.o: myMal.c myMal.h
+	$(CC) $(CFLAGS) -c $< -o myMal.o
 
 clean:
-	rm -f malloc
+	rm -f malloc myMal.o

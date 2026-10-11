@@ -3,8 +3,6 @@
 #include <stdio.h>
 #include "myMal.h"
 
-//TODO: functie care concateneaza toate block-urile libere
-//TODO; free :)
 int main(void) {
 	int *v = (int *) my_malloc(sizeof(int) * 500);
 	if(!v) {
@@ -15,7 +13,8 @@ int main(void) {
 		v[i] = i;
 		printf("%d", v[i]);
 	}
-	free(v);
+	printf("\n");
+	my_free(v);
 	v = (int *) my_malloc(sizeof(int) * 500);
 	if(!v) {
 		fprintf(stdout, "Not enough mem\n");
@@ -25,6 +24,8 @@ int main(void) {
 		v[i] = i;
 		printf("%d", v[i]);
 	}
+	printf("\n");
+	my_free(v);
 
 	return 0;
 }

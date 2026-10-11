@@ -14,9 +14,7 @@ struct mem_page *request_page() {
 	if(new_page == MAP_FAILED) {
 		return NULL;
 	}
-	new_page->avail = PAGE_SIZE - (sizeof(size_t) 
-							  + 2 * sizeof(struct mem_page *)
-							  + sizeof(struct heap_header));
+	new_page->avail = MAX_ALLOC;
 	new_page->next = NULL;
 	new_page->prev = NULL;
 	new_page->start = (struct heap_header *) (new_page + 1);
@@ -29,12 +27,12 @@ struct mem_page *request_page() {
 
 struct heap_header *searchFreeHeap(size_t size, struct mem_page *page) {
 	struct heap_header *i;
-	for(i = page->start; i->block_size < size || !i->is_free; i = i->next) {
-		if(!i->next) {
-			return NULL;
+	for(i = page->start; i != NULL; i = i->next) {
+		if(i->is_free && i->block_size >= size) {
+			return i;
 		}
 	}
-	return i;
+	return NULL;
 }
 
 void *jumpNBytes(void *addr_to_jump_from, size_t howMuch) {
@@ -45,19 +43,30 @@ void *jumpNBytes(void *addr_to_jump_from, size_t howMuch) {
 
 struct mem_page *searchFreePage(size_t howMuchNeed, struct mem_page *start) {
 	struct mem_page *i;
-	for(i = start; i != NULL && i->avail < howMuchNeed; i = i->next) {
-		if(!i->next && i->avail < howMuchNeed) {
+	for(i = start; i != NULL; i = i->next) {
+		// avail is the total of the free blocks, so also check one of them is big enough
+		if(i->avail >= howMuchNeed && searchFreeHeap(howMuchNeed, i)) {
+			return i;
+		}
+		if(!i->next) {
 			struct mem_page *new_page = request_page();
+			if(!new_page) {
+				return NULL;
+			}
 			i->next = new_page;
-			i->next->prev = i;
-			i = i->next;
-			break;
+			new_page->prev = i;
+			return new_page;
 		}
 	}
-	return i;
+	return NULL;
 }
 
 void *my_malloc(size_t size) {
+
+	if(size > MAX_ALLOC) {
+		return NULL;
+	}
+	size = (size + ALIGNMENT - 1) & ~(size_t)(ALIGNMENT - 1);
 
 	if(!start_page) {
 		start_page = request_page();
@@ -68,14 +77,19 @@ void *my_malloc(size_t size) {
 	}
 	size_t howMuchNeed = size + sizeof(struct heap_header);
 
-	struct mem_page *page = searchFreePage(howMuchNeed, start_page);
+	struct mem_page *page = searchFreePage(size, start_page);
+	if(!page) {
+		fprintf(stderr, "Mmap failed\n");
+		return NULL;
+	}
 
-	struct heap_header *new_heap = searchFreeHeap(howMuchNeed, page);
+	struct heap_header *new_heap = searchFreeHeap(size, page);
 	if(!new_heap) {
 		return NULL;
 	}
 	struct heap_header *frag_heap = NULL;
-	if(howMuchNeed < page->avail) {
+	// split only if what is left can hold a header and some data
+	if(new_heap->block_size >= howMuchNeed + ALIGNMENT) {
 		frag_heap = (struct heap_header *)jumpNBytes((struct heap_header *)new_heap, howMuchNeed);
 		frag_heap->block_size = new_heap->block_size - howMuchNeed;
 		frag_heap->next = new_heap->next;
@@ -85,12 +99,10 @@ void *my_malloc(size_t size) {
 
 		new_heap->next = frag_heap;
 		new_heap->block_size = size;
-		new_heap->is_free = 0;
-
-	} else {
-		new_heap->is_free = 0;
+		page->avail -= sizeof(struct heap_header);
 	}
-	page->avail -= howMuchNeed;
+	new_heap->is_free = 0;
+	page->avail -= new_heap->block_size;
 	return new_heap + 1;
 }
 
@@ -117,19 +129,25 @@ void goToStart(struct heap_header **ptr) {
 	while ((*ptr)->prev) (*ptr) = (*ptr)->prev;
 }
 
-void free(void *ptr) {
+void my_free(void *ptr) {
+	if(!ptr) return;
+
 	struct heap_header *toFree = (struct heap_header *)ptr - 1;
+	if(toFree->is_free) return; // double free
 
 	toFree->is_free = 1;
-	size_t freeBlockSz = toFree->block_size
-						 + sizeof(struct heap_header);
 
 	goToStart(&toFree);
 
 	struct mem_page *page = (struct mem_page *)toFree - 1;
-	page->avail += freeBlockSz;
 
 	sanitizePage(toFree);
+
+	// merged blocks give their headers back, so recount
+	page->avail = 0;
+	for(struct heap_header *i = page->start; i != NULL; i = i->next) {
+		if(i->is_free) page->avail += i->block_size;
+	}
 }
 
 void cleanup() {
